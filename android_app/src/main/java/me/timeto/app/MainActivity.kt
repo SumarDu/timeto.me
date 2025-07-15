@@ -43,6 +43,11 @@ import me.timeto.shared.vm.app.AppVm
 
 class MainActivity : ComponentActivity() {
 
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(batteryReceiver)
+    }
+
     var statusBarHeightDp: Dp = 0.dp
 
     private val batteryReceiver = object : BroadcastReceiver() {

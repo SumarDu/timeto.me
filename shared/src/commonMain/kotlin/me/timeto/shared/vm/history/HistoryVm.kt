@@ -2,16 +2,19 @@ package me.timeto.shared.vm.history
 
 import kotlinx.coroutines.flow.*
 import me.timeto.shared.*
-import me.timeto.shared.db.ActivityDb
-import me.timeto.shared.db.IntervalDb
+
 import me.timeto.shared.limitMax
 import me.timeto.shared.limitMin
 import me.timeto.shared.time
 import me.timeto.shared.DialogsManager
 import me.timeto.shared.vm.history.form.HistoryFormUtils
 import me.timeto.shared.vm.Vm
+import me.timeto.shared.vm.history.colorFromRgbaString
 
-class HistoryVm : Vm<HistoryVm.State>() {
+import kotlinx.datetime.Clock
+import kotlinx.datetime.Instant
+
+class HistoryVm(private val historyRepository: HistoryRepository) : Vm<HistoryVm.State>() {
 
     data class State(
         val daysUi: List<DayUi>,
@@ -24,22 +27,20 @@ class HistoryVm : Vm<HistoryVm.State>() {
     )
 
     init {
-        val now = UnixTime()
         val scopeVm = scopeVm()
-        IntervalDb.selectBetweenIdDescFlow(
-            timeStart = now.inDays(-10).localDayStartTime(),
-            timeFinish = Int.MAX_VALUE,
-        ).map { it.reversed() }.onEachExIn(scopeVm) { intervalsDbAsc ->
+        historyRepository.getEvents().onEachExIn(scopeVm) { events ->
             state.update {
                 it.copy(
-                    daysUi = makeDaysUi(intervalsDbAsc = intervalsDbAsc),
+                    daysUi = makeDaysUi(events = events)
                 )
             }
         }
     }
 
+    // TODO: This functionality needs to be re-evaluated as it depended on the old data model.
+    /*
     fun moveIntervalToTasks(
-        intervalDb: IntervalDb,
+        intervalDb: HistoryEvent,
         dialogsManager: DialogsManager,
     ) {
         HistoryFormUtils.moveToTasksUi(
@@ -50,7 +51,7 @@ class HistoryVm : Vm<HistoryVm.State>() {
     }
 
     fun deleteInterval(
-        intervalDb: IntervalDb,
+        intervalDb: HistoryEvent,
         dialogsManager: DialogsManager,
     ) {
         HistoryFormUtils.deleteIntervalUi(
@@ -59,45 +60,46 @@ class HistoryVm : Vm<HistoryVm.State>() {
             onSuccess = {},
         )
     }
+    */
+}
 
-    ///
+///
 
-    class DayUi(
+class DayUi(
         val unixDay: Int,
-        val intervalsDb: List<IntervalDb>,
-        val nextIntervalTimeStart: Int,
+        val events: List<HistoryEvent>,
+        val nextEventStartTime: Int,
     ) {
 
         private val dayUnixTime: UnixTime = UnixTime.byLocalDay(unixDay)
         private val dayTimeStart: Int = dayUnixTime.time
         private val dayTimeFinish: Int = dayTimeStart + 86400 - 1
 
-        // For iOS bugfix. Docs in HistoryFullScreen.swift todo remove
-        val secondsFromDayStartIosFix: Int =
-            (intervalsDb.first().id - dayUnixTime.time).limitMin(0)
+        val intervalsUi: List<IntervalUi> = events.map { event ->
+            val startTime = Instant.fromEpochMilliseconds(event.startTime.toLong()).epochSeconds.toInt()
+            val endTime = if (event.endTime.isEmpty()) {
+                Clock.System.now().epochSeconds.toInt()
+            } else {
+                Instant.fromEpochMilliseconds(event.endTime.toLong()).epochSeconds.toInt()
+            }
+            val unixTime = UnixTime(startTime)
 
-        val intervalsUi: List<IntervalUi> = intervalsDb.map { intervalDb ->
-            val unixTime: UnixTime = intervalDb.unixTime()
-            val activityDb: ActivityDb = intervalDb.selectActivityDbCached()
-
-            val finishTime: Int =
-                intervalsDb.getNextOrNull(intervalDb)?.id ?: nextIntervalTimeStart
-            val seconds: Int = finishTime - intervalDb.id
-            val barTimeFinish: Int = dayTimeFinish.limitMax(finishTime)
+            val finishTime = events.getNextOrNull(event)?.let { Instant.fromEpochMilliseconds(it.startTime.toLong()).epochSeconds.toInt() } ?: nextEventStartTime
+            val seconds = (endTime - startTime).limitMin(0)
+            val barTimeFinish = dayTimeFinish.limitMax(endTime)
 
             IntervalUi(
-                intervalDb = intervalDb,
-                activityDb = activityDb,
+                event = event,
                 isStartsPrevDay = unixTime.localDay < unixDay,
-                text = (intervalDb.note ?: activityDb.name).textFeatures().textUi(
+                text = event.eventName.textFeatures().textUi(
                     withActivityEmoji = false,
                     withTimer = false,
                 ),
-                secondsForBar = barTimeFinish - dayTimeStart.limitMin(intervalDb.id),
+                secondsForBar = (barTimeFinish - dayTimeStart.limitMin(startTime)),
                 barTimeFinish = barTimeFinish,
                 timeString = unixTime.getStringByComponents(UnixTime.StringComponent.hhmm24),
                 periodString = makePeriodString(seconds),
-                color = activityDb.colorRgba,
+                color = colorFromRgbaString(event.colorRgba),
             )
         }
 
@@ -111,9 +113,8 @@ class HistoryVm : Vm<HistoryVm.State>() {
         )
     }
 
-    data class IntervalUi(
-        val intervalDb: IntervalDb,
-        val activityDb: ActivityDb,
+        data class IntervalUi(
+        val event: HistoryEvent,
         val isStartsPrevDay: Boolean,
         val text: String,
         val secondsForBar: Int,
@@ -122,7 +123,8 @@ class HistoryVm : Vm<HistoryVm.State>() {
         val periodString: String,
         val color: ColorRgba,
     )
-}
+
+///
 
 ///
 
@@ -139,45 +141,33 @@ private fun makePeriodString(
     return "${h}h ${m.toString().padStart(2, '0')}m"
 }
 
-private fun makeDaysUi(
-    intervalsDbAsc: List<IntervalDb>,
-): List<HistoryVm.DayUi> {
-    val daysUi: MutableList<HistoryVm.DayUi> = mutableListOf()
+private fun makeDaysUi(events: List<HistoryEvent>): List<DayUi> {
+    if (events.isEmpty()) return emptyList()
 
-    // "last" I mean the last while iteration
-    var lastDay = UnixTime(intervalsDbAsc.first().id).localDay
-    var lastList = mutableListOf<IntervalDb>()
+    val eventsWithTime = events.map { event ->
+                val startTime = Instant.fromEpochMilliseconds(event.startTime.toLong()).epochSeconds.toInt()
+        Pair(event, UnixTime(startTime))
+    }.sortedBy { it.second.time }
 
-    intervalsDbAsc.forEach { interval ->
-        val intervalTime = interval.unixTime()
-        if (lastDay == intervalTime.localDay) {
-            lastList.add(interval)
-        } else {
-            daysUi.add(
-                HistoryVm.DayUi(
-                    unixDay = lastDay,
-                    intervalsDb = lastList,
-                    nextIntervalTimeStart = interval.id,
-                )
-            )
-            lastDay = intervalTime.localDay
-            // If the interval starts at 00:00 the tail from the previous day is not needed
-            lastList = if (intervalTime.localDayStartTime() == intervalTime.time) {
-                mutableListOf(interval)
-            } else {
-                mutableListOf(lastList.last(), interval)
-            }
-        }
-    }
-    if (lastList.isNotEmpty()) {
+    val groupedByDay = eventsWithTime.groupBy { it.second.localDay }
+
+    val daysUi = mutableListOf<DayUi>()
+    val sortedDays = groupedByDay.keys.sorted()
+
+    sortedDays.forEachIndexed { index, day ->
+        val dayEvents = groupedByDay[day]!!.map { it.first }
+        val nextDayKey = if (index + 1 < sortedDays.size) sortedDays[index + 1] else null
+        val nextEventStartTime = nextDayKey?.let { key -> groupedByDay[key]?.firstOrNull()?.second?.time } ?: time()
+
         daysUi.add(
-            HistoryVm.DayUi(
-                unixDay = lastDay,
-                intervalsDb = lastList,
-                nextIntervalTimeStart = time(),
+            DayUi(
+                unixDay = day,
+                events = dayEvents,
+                nextEventStartTime = nextEventStartTime
             )
         )
     }
 
-    return daysUi
+    return daysUi.reversed()
 }
+

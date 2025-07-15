@@ -1,7 +1,17 @@
+import java.util.Properties
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
+}
+
 plugins {
     kotlin("android")
     id("com.android.application")
-    id("org.jetbrains.kotlin.plugin.compose") version "2.1.20"
+        id("org.jetbrains.kotlin.plugin.compose") version "2.1.20"
+            id("com.google.devtools.ksp")
+    kotlin("plugin.serialization") version "2.1.20"
 }
 
 android {
@@ -9,12 +19,16 @@ android {
     namespace = "me.timeto.app"
     compileSdk = 35
 
+
+
     defaultConfig {
         applicationId = "me.timeto.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 580
         versionName = "2025.06.26"
+        buildConfigField("String", "SUPABASE_URL", "\"${localProperties.getProperty("SUPABASE_URL")}\"")
+        buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProperties.getProperty("SUPABASE_ANON_KEY")}\"")
     }
 
     buildTypes {
@@ -55,9 +69,23 @@ android {
     compileOptions.targetCompatibility = JavaVersion.VERSION_21
 
     buildFeatures.buildConfig = true
+
+
 }
 
 dependencies {
+    val room_version = "2.7.2"
+
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+    ksp("androidx.room:room-compiler:$room_version")
+
+    val supabase_version = "3.2.0"
+    val ktor_version = "3.2.1"
+    implementation(platform("io.github.jan-tennert.supabase:bom:$supabase_version"))
+    implementation("io.github.jan-tennert.supabase:postgrest-kt")
+    implementation("io.ktor:ktor-client-android:$ktor_version")
+
     implementation(project(":shared"))
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material:material:1.8.3")

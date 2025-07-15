@@ -49,8 +49,9 @@ fun HistoryFs() {
     val navigationFs = LocalNavigationFs.current
     val navigationLayer = LocalNavigationLayer.current
 
-    val (_, state) = rememberVm {
-        HistoryVm()
+    val app = mainActivity.application as me.timeto.app.App
+    val (vm, state) = rememberVm {
+        HistoryVm(app.eventRepository)
     }
 
     Screen {
@@ -72,7 +73,7 @@ fun HistoryFs() {
 
                 dayUi.intervalsUi.reversed().forEach { intervalUi ->
 
-                    item(key = "interval_${dayUi.unixDay}_${intervalUi.intervalDb.id}") {
+                    item(key = "interval_${dayUi.unixDay}_${intervalUi.event.uuid}") {
 
                         val timeHeight = (intervalUi.secondsForBar / barPxSecondsRatio).dp
 
@@ -80,13 +81,13 @@ fun HistoryFs() {
                             modifier = Modifier
                                 .padding(horizontal = H_PADDING_HALF)
                                 .clip(squircleShape)
-                                .clickable {
+                                /* .clickable {
                                     navigationFs.push {
                                         HistoryFormFs(
-                                            initIntervalDb = intervalUi.intervalDb,
+                                            initIntervalDb = null, // Was: intervalUi.event
                                         )
                                     }
-                                },
+                                } */,
                         ) {
 
                             Text(
@@ -163,7 +164,7 @@ fun HistoryFs() {
                 .padding(horizontal = H_PADDING_HALF),
         ) {
 
-            FooterAddButton(
+            /* FooterAddButton(
                 text = "New Entry",
                 onClick = {
                     navigationFs.push {
@@ -172,7 +173,7 @@ fun HistoryFs() {
                         )
                     }
                 },
-            )
+            ) */
 
             SpacerW1()
 
